@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Contador de Visualizações
  * Description: Conta as visualizações de páginas específicas e exibe o total em qualquer página via shortcode, sem exigir login.
- * Version:     1.2.0
+ * Version:     1.3.0
  * Author:      Douglas
  * Text Domain: contador-visualizacoes
  * License:     GPL-2.0-or-later
@@ -16,7 +16,7 @@ final class CV_Contador_Visualizacoes {
 
 	const META_KEY   = '_cv_views';
 	const OPTION_KEY = 'cv_options';
-	const VERSION    = '1.2.0';
+	const VERSION    = '1.3.0';
 
 	/** @var bool Evita enfileirar o script mais de uma vez. */
 	private static $script_enfileirado = false;
@@ -43,6 +43,8 @@ final class CV_Contador_Visualizacoes {
 			'ignorar_admin' => 1,   // não contar usuários logados que podem editar
 			'ignorar_bots'  => 1,   // não contar bots/crawlers
 			'tempo_minutos' => 30,  // anti-inflação: intervalo mínimo entre contagens do mesmo visitante (0 = desativado)
+			'texto_padrao'  => '{n} visualizações', // texto exibido com o número
+			'texto_carregando' => 'Carregando...',  // texto exibido enquanto a contagem é buscada
 		];
 		return wp_parse_args( get_option( self::OPTION_KEY, [] ), $padrao );
 	}
@@ -275,10 +277,11 @@ JS;
 	 * ------------------------------------------------------------- */
 
 	public static function shortcode( $atts ) {
-		$atts = shortcode_atts( [
+		$opcoes = self::opcoes();
+		$atts   = shortcode_atts( [
 			'id'         => 0,
-			'texto'      => '{n} visualizações',
-			'carregando' => 'Carregando...',
+			'texto'      => $opcoes['texto_padrao'],
+			'carregando' => $opcoes['texto_carregando'],
 		], $atts, 'contador_visualizacoes' );
 
 		$post_id = absint( $atts['id'] );
@@ -335,7 +338,30 @@ JS;
 	}
 
 	public static function sanitizar_opcoes( $entrada ) {
+		$padrao = [
+			'texto_padrao'     => '{n} visualizações',
+			'texto_carregando' => 'Carregando...',
+		];
+
+		$texto = isset( $entrada['texto_padrao'] ) ? sanitize_text_field( $entrada['texto_padrao'] ) : '';
+		if ( '' === $texto || false === strpos( $texto, '{n}' ) ) {
+			add_settings_error(
+				self::OPTION_KEY,
+				'cv_texto_invalido',
+				'O texto de exibição precisa conter {n}, que é substituído pelo número. O valor padrão foi restaurado.',
+				'warning'
+			);
+			$texto = $padrao['texto_padrao'];
+		}
+
+		$carregando = isset( $entrada['texto_carregando'] ) ? sanitize_text_field( $entrada['texto_carregando'] ) : '';
+		if ( '' === $carregando ) {
+			$carregando = $padrao['texto_carregando'];
+		}
+
 		return [
+			'texto_padrao'     => $texto,
+			'texto_carregando' => $carregando,
 			'paginas'       => isset( $entrada['paginas'] ) ? array_values( array_filter( array_map( 'absint', (array) $entrada['paginas'] ) ) ) : [],
 			'ignorar_admin' => empty( $entrada['ignorar_admin'] ) ? 0 : 1,
 			'ignorar_bots'  => empty( $entrada['ignorar_bots'] ) ? 0 : 1,
@@ -383,6 +409,20 @@ JS;
 							<p class="description">Tempo mínimo entre duas contagens do mesmo visitante (IP + navegador) na mesma página. Use <code>0</code> para contar todas as visitas, inclusive recarregamentos. Máximo: 10080 (7 dias).</p>
 						</td>
 					</tr>
+					<tr>
+						<th scope="row"><label for="cv_texto">Texto de exibição</label></th>
+						<td>
+							<input type="text" id="cv_texto" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[texto_padrao]" value="<?php echo esc_attr( $opcoes['texto_padrao'] ); ?>" class="regular-text">
+							<p class="description">Use <code>{n}</code> no lugar do número. Exemplo: <code>{n} visualizações</code> ou <code>Visto {n} vezes</code>.</p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="cv_carregando">Texto de carregamento</label></th>
+						<td>
+							<input type="text" id="cv_carregando" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[texto_carregando]" value="<?php echo esc_attr( $opcoes['texto_carregando'] ); ?>" class="regular-text">
+							<p class="description">Exibido enquanto a contagem é buscada. Exemplo: <code>Carregando...</code></p>
+						</td>
+					</tr>
 				</table>
 				<?php submit_button(); ?>
 			</form>
@@ -393,8 +433,8 @@ JS;
 			<p>Sem o <code>id</code>, exibe a contagem da página atual.</p>
 			<p>Atributos opcionais:</p>
 			<ul style="list-style:disc;margin-left:20px;">
-				<li><code>texto</code>: texto exibido, usando <code>{n}</code> no lugar do número. Ex.: <code>texto="Esta página foi vista {n} vezes"</code></li>
-				<li><code>carregando</code>: mensagem exibida enquanto a contagem é buscada. Ex.: <code>carregando="Buscando..."</code></li>
+				<li><code>texto</code>: substitui o texto de exibição definido acima só nesse shortcode. Ex.: <code>texto="Esta página foi vista {n} vezes"</code></li>
+				<li><code>carregando</code>: substitui o texto de carregamento definido acima só nesse shortcode. Ex.: <code>carregando="Buscando..."</code></li>
 			</ul>
 		</div>
 		<?php
