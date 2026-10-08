@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Contador de Visualizações
  * Description: Conta as visualizações de páginas específicas e exibe o total em qualquer página via shortcode, sem exigir login.
- * Version:     1.3.0
+ * Version:     1.4.0
  * Author:      Douglas
  * Text Domain: contador-visualizacoes
  * License:     GPL-2.0-or-later
@@ -16,7 +16,7 @@ final class CV_Contador_Visualizacoes {
 
 	const META_KEY   = '_cv_views';
 	const OPTION_KEY = 'cv_options';
-	const VERSION    = '1.3.0';
+	const VERSION    = '1.4.0';
 
 	/** @var bool Evita enfileirar o script mais de uma vez. */
 	private static $script_enfileirado = false;
@@ -29,6 +29,7 @@ final class CV_Contador_Visualizacoes {
 		// Admin
 		add_action( 'admin_menu', [ __CLASS__, 'menu_admin' ] );
 		add_action( 'admin_init', [ __CLASS__, 'registrar_opcoes' ] );
+		add_action( 'admin_post_cv_limpar_dados', [ __CLASS__, 'limpar_dados' ] );
 		add_filter( 'manage_pages_columns', [ __CLASS__, 'coluna_titulo' ] );
 		add_action( 'manage_pages_custom_column', [ __CLASS__, 'coluna_conteudo' ], 10, 2 );
 	}
@@ -321,6 +322,48 @@ JS;
 	 * Admin: configurações e coluna na lista de páginas
 	 * ------------------------------------------------------------- */
 
+	/**
+	 * Apaga todas as contagens e os registros temporários do anti-inflação.
+	 * Acionado pelo botão "Limpar dados" (formulário com nonce).
+	 */
+	public static function limpar_dados() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( 'Você não tem permissão para realizar esta ação.', 403 );
+		}
+		check_admin_referer( 'cv_limpar_dados' );
+
+		global $wpdb;
+
+		// Quantidade de páginas com contagem registrada (para informar no aviso).
+		$afetadas = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key = %s",
+				self::META_KEY
+			)
+		);
+
+		// Remove as contagens de todas as páginas.
+		delete_post_meta_by_key( self::META_KEY );
+
+		// Remove os registros temporários do anti-inflação (visitantes "em espera").
+		$wpdb->query(
+			$wpdb->prepare(
+				"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+				$wpdb->esc_like( '_transient_cv_' ) . '%',
+				$wpdb->esc_like( '_transient_timeout_cv_' ) . '%'
+			)
+		);
+
+		wp_safe_redirect( add_query_arg(
+			[
+				'page'      => 'cv-contador',
+				'cv_limpo'  => $afetadas,
+			],
+			admin_url( 'options-general.php' )
+		) );
+		exit;
+	}
+
 	public static function menu_admin() {
 		add_options_page(
 			'Contador de Visualizações',
@@ -378,6 +421,16 @@ JS;
 		?>
 		<div class="wrap">
 			<h1>Contador de Visualizações</h1>
+			<?php if ( isset( $_GET['cv_limpo'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification ?>
+				<div class="notice notice-success is-dismissible">
+					<p>
+						<?php
+						$n = absint( $_GET['cv_limpo'] ); // phpcs:ignore WordPress.Security.NonceVerification
+						echo esc_html( sprintf( 'Dados limpos com sucesso. Contagens removidas de %d página(s).', $n ) );
+						?>
+					</p>
+				</div>
+			<?php endif; ?>
 			<form method="post" action="options.php">
 				<?php settings_fields( 'cv_grupo' ); ?>
 				<table class="form-table" role="presentation">
@@ -425,6 +478,22 @@ JS;
 					</tr>
 				</table>
 				<?php submit_button(); ?>
+			</form>
+
+			<h2>Dados</h2>
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+				<input type="hidden" name="action" value="cv_limpar_dados">
+				<?php wp_nonce_field( 'cv_limpar_dados' ); ?>
+				<p>Apaga as contagens de visualizações de <strong>todas</strong> as páginas e os registros temporários do anti-inflação. As configurações acima são mantidas.</p>
+				<?php
+				submit_button(
+					'Limpar dados de visualizações',
+					'delete',
+					'submit',
+					false,
+					[ 'onclick' => "return confirm('Tem certeza? Todas as contagens de visualizações serão apagadas e esta ação não pode ser desfeita.');" ]
+				);
+				?>
 			</form>
 
 			<h2>Como usar</h2>
