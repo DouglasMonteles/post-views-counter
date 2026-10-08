@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Contador de Visualizações
- * Description: Conta as visualizações de páginas específicas e exibe o total em qualquer página via shortcode, sem exigir login.
- * Version:     1.4.0
+ * Description: Conta as visualizações de páginas e posts específicos e exibe o total em qualquer lugar via shortcode, sem exigir login.
+ * Version:     1.6.0
  * Author:      Douglas
  * Text Domain: contador-visualizacoes
  * License:     GPL-2.0-or-later
@@ -16,7 +16,7 @@ final class CV_Contador_Visualizacoes {
 
 	const META_KEY   = '_cv_views';
 	const OPTION_KEY = 'cv_options';
-	const VERSION    = '1.4.0';
+	const VERSION    = '1.6.0';
 
 	/** @var bool Evita enfileirar o script mais de uma vez. */
 	private static $script_enfileirado = false;
@@ -30,19 +30,28 @@ final class CV_Contador_Visualizacoes {
 		add_action( 'admin_menu', [ __CLASS__, 'menu_admin' ] );
 		add_action( 'admin_init', [ __CLASS__, 'registrar_opcoes' ] );
 		add_action( 'admin_post_cv_limpar_dados', [ __CLASS__, 'limpar_dados' ] );
-		add_filter( 'manage_pages_columns', [ __CLASS__, 'coluna_titulo' ] );
-		add_action( 'manage_pages_custom_column', [ __CLASS__, 'coluna_conteudo' ], 10, 2 );
+		add_action( 'admin_init', [ __CLASS__, 'registrar_colunas' ] );
 	}
 
 	/* ---------------------------------------------------------------
 	 * Opções
 	 * ------------------------------------------------------------- */
 
+	/**
+	 * Tipos de conteúdo que podem ser monitorados. Por padrão: páginas e posts.
+	 * Outros tipos (ex.: um CPT) podem ser adicionados com o filtro 'cv_post_types'.
+	 */
+	public static function tipos_suportados() {
+		$tipos = apply_filters( 'cv_post_types', [ 'page', 'post' ] );
+		return array_values( array_filter( (array) $tipos, 'post_type_exists' ) );
+	}
+
 	private static function opcoes() {
 		$padrao = [
 			'paginas'       => [],  // IDs das páginas monitoradas
 			'ignorar_admin' => 1,   // não contar usuários logados que podem editar
 			'ignorar_bots'  => 1,   // não contar bots/crawlers
+			'todos_posts'   => 0,   // monitorar automaticamente todos os posts
 			'tempo_minutos' => 30,  // anti-inflação: intervalo mínimo entre contagens do mesmo visitante (0 = desativado)
 			'texto_padrao'  => '{n} visualizações', // texto exibido com o número
 			'texto_carregando' => 'Carregando...',  // texto exibido enquanto a contagem é buscada
@@ -52,6 +61,12 @@ final class CV_Contador_Visualizacoes {
 
 	private static function pagina_monitorada( $post_id ) {
 		$opcoes = self::opcoes();
+
+		// "Monitorar todos os posts": qualquer post publicado é monitorado.
+		if ( ! empty( $opcoes['todos_posts'] ) && 'post' === get_post_type( $post_id ) ) {
+			return true;
+		}
+
 		return in_array( (int) $post_id, array_map( 'intval', (array) $opcoes['paginas'] ), true );
 	}
 
@@ -118,7 +133,7 @@ final class CV_Contador_Visualizacoes {
 			return self::resposta( $post_id, false );
 		}
 
-		if ( $opcoes['ignorar_admin'] && is_user_logged_in() && current_user_can( 'edit_pages' ) ) {
+		if ( $opcoes['ignorar_admin'] && is_user_logged_in() && current_user_can( 'edit_posts' ) ) {
 			return self::resposta( $post_id, false );
 		}
 
@@ -173,7 +188,7 @@ final class CV_Contador_Visualizacoes {
 
 	/** Em páginas monitoradas, o script também registra a visita. */
 	public static function enfileirar_na_pagina_monitorada() {
-		if ( ! is_singular( 'page' ) ) {
+		if ( ! is_singular( self::tipos_suportados() ) ) {
 			return;
 		}
 
@@ -403,6 +418,7 @@ JS;
 		}
 
 		return [
+			'todos_posts'      => empty( $entrada['todos_posts'] ) ? 0 : 1,
 			'texto_padrao'     => $texto,
 			'texto_carregando' => $carregando,
 			'paginas'       => isset( $entrada['paginas'] ) ? array_values( array_filter( array_map( 'absint', (array) $entrada['paginas'] ) ) ) : [],
@@ -417,7 +433,7 @@ JS;
 			return;
 		}
 		$opcoes  = self::opcoes();
-		$paginas = get_pages( [ 'post_status' => 'publish' ] );
+		$tipos   = self::tipos_suportados();
 		?>
 		<div class="wrap">
 			<h1>Contador de Visualizações</h1>
@@ -426,7 +442,7 @@ JS;
 					<p>
 						<?php
 						$n = absint( $_GET['cv_limpo'] ); // phpcs:ignore WordPress.Security.NonceVerification
-						echo esc_html( sprintf( 'Dados limpos com sucesso. Contagens removidas de %d página(s).', $n ) );
+						echo esc_html( sprintf( 'Dados limpos com sucesso. Contagens removidas de %d item(ns).', $n ) );
 						?>
 					</p>
 				</div>
@@ -435,21 +451,45 @@ JS;
 				<?php settings_fields( 'cv_grupo' ); ?>
 				<table class="form-table" role="presentation">
 					<tr>
-						<th scope="row"><label for="cv_paginas">Páginas monitoradas</label></th>
+						<th scope="row">Todos os posts</th>
 						<td>
-							<select id="cv_paginas" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[paginas][]" multiple size="8" style="min-width:300px;">
-								<?php foreach ( $paginas as $p ) : ?>
-									<option value="<?php echo esc_attr( $p->ID ); ?>" <?php selected( in_array( $p->ID, array_map( 'intval', $opcoes['paginas'] ), true ) ); ?>>
-										<?php echo esc_html( $p->post_title . ' (ID ' . $p->ID . ')' ); ?>
-									</option>
+							<label><input type="checkbox" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[todos_posts]" value="1" <?php checked( $opcoes['todos_posts'], 1 ); ?>> Monitorar todos os posts, inclusive os que forem publicados no futuro</label>
+							<p class="description">Com esta opção ativada, não é preciso selecionar cada post individualmente.</p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="cv_paginas">Páginas e posts monitorados</label></th>
+						<td>
+							<select id="cv_paginas" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[paginas][]" multiple size="12" style="min-width:380px;">
+								<?php foreach ( $tipos as $tipo ) :
+									$obj      = get_post_type_object( $tipo );
+									$conteudo = get_posts( [
+										'post_type'      => $tipo,
+										'post_status'    => 'publish',
+										'posts_per_page' => -1,
+										'orderby'        => 'title',
+										'order'          => 'ASC',
+										'no_found_rows'  => true,
+									] );
+									if ( ! $conteudo ) {
+										continue;
+									}
+									?>
+									<optgroup label="<?php echo esc_attr( $obj ? $obj->labels->name : $tipo ); ?>">
+										<?php foreach ( $conteudo as $p ) : ?>
+											<option value="<?php echo esc_attr( $p->ID ); ?>" <?php selected( in_array( $p->ID, array_map( 'intval', $opcoes['paginas'] ), true ) ); ?>>
+												<?php echo esc_html( ( '' !== $p->post_title ? $p->post_title : '(sem título)' ) . ' (ID ' . $p->ID . ')' ); ?>
+											</option>
+										<?php endforeach; ?>
+									</optgroup>
 								<?php endforeach; ?>
 							</select>
-							<p class="description">Segure Ctrl/Cmd para selecionar mais de uma. Apenas estas páginas terão as visualizações contadas.</p>
+							<p class="description">Segure Ctrl/Cmd para selecionar mais de uma. Apenas estes conteúdos (páginas e posts) terão as visualizações contadas. Os posts selecionados aqui são ignorados enquanto "Todos os posts" estiver ativado, pois já são todos monitorados.</p>
 						</td>
 					</tr>
 					<tr>
 						<th scope="row">Ignorar editores logados</th>
-						<td><label><input type="checkbox" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[ignorar_admin]" value="1" <?php checked( $opcoes['ignorar_admin'], 1 ); ?>> Não contar visitas de quem pode editar páginas</label></td>
+						<td><label><input type="checkbox" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[ignorar_admin]" value="1" <?php checked( $opcoes['ignorar_admin'], 1 ); ?>> Não contar visitas de quem pode editar o conteúdo</label></td>
 					</tr>
 					<tr>
 						<th scope="row">Ignorar bots</th>
@@ -484,7 +524,7 @@ JS;
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 				<input type="hidden" name="action" value="cv_limpar_dados">
 				<?php wp_nonce_field( 'cv_limpar_dados' ); ?>
-				<p>Apaga as contagens de visualizações de <strong>todas</strong> as páginas e os registros temporários do anti-inflação. As configurações acima são mantidas.</p>
+				<p>Apaga as contagens de visualizações de <strong>todas</strong> as páginas e posts e os registros temporários do anti-inflação. As configurações acima são mantidas.</p>
 				<?php
 				submit_button(
 					'Limpar dados de visualizações',
@@ -497,9 +537,9 @@ JS;
 			</form>
 
 			<h2>Como usar</h2>
-			<p>Em qualquer página ou post, adicione o shortcode:</p>
+			<p>Em qualquer página ou post, adicione o shortcode (o <code>id</code> pode ser de uma página ou de um post):</p>
 			<p><code>[contador_visualizacoes id="123"]</code></p>
-			<p>Sem o <code>id</code>, exibe a contagem da página atual.</p>
+			<p>Sem o <code>id</code>, exibe a contagem do conteúdo atual.</p>
 			<p>Atributos opcionais:</p>
 			<ul style="list-style:disc;margin-left:20px;">
 				<li><code>texto</code>: substitui o texto de exibição definido acima só nesse shortcode. Ex.: <code>texto="Esta página foi vista {n} vezes"</code></li>
@@ -507,6 +547,13 @@ JS;
 			</ul>
 		</div>
 		<?php
+	}
+
+	public static function registrar_colunas() {
+		foreach ( self::tipos_suportados() as $tipo ) {
+			add_filter( "manage_{$tipo}_posts_columns", [ __CLASS__, 'coluna_titulo' ] );
+			add_action( "manage_{$tipo}_posts_custom_column", [ __CLASS__, 'coluna_conteudo' ], 10, 2 );
+		}
 	}
 
 	public static function coluna_titulo( $colunas ) {
